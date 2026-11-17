@@ -1,0 +1,70 @@
+# Compila thinktwice en GitHub Actions y publica el APK como artefacto descargable.
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ "v*" ]
+  pull_request:
+  workflow_dispatch:   # permite lanzarlo a mano desde la pestaña Actions
+
+permissions:
+  contents: write      # necesario solo para adjuntar el APK a una Release al publicar un tag
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Instalar JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configurar Gradle (con caché)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Dar permiso de ejecución a gradlew
+        run: chmod +x gradlew
+
+      - name: Pruebas unitarias (motor de reglas y copias de seguridad)
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Compilar APK debug
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Renombrar APK
+        run: |
+          VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/thinktwice-${VERSION}-debug.apk"
+          ls -la dist
+
+      - name: Subir APK como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: thinktwice-apk
+          path: dist/*.apk
+          retention-days: 30
+
+      - name: Subir informes de pruebas si fallan
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: app/build/reports/tests/
+
+      - name: Adjuntar APK a la Release (solo al publicar un tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.apk
